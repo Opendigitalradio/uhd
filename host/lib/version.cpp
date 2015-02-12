@@ -22,7 +22,7 @@
 
 #ifndef UHD_DONT_PRINT_SYSTEM_INFO
 UHD_STATIC_BLOCK(print_system_info){
-    std::cout
+    std::cerr
         << BOOST_PLATFORM << "; "
         << BOOST_COMPILER << "; "
         << "Boost_" << BOOST_VERSION << "; "

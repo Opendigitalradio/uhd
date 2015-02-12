@@ -89,12 +89,18 @@ private:
     }
 
   std::string update_cached_sensors(const std::string sensor) {
-    if(not gps_detected() || (gps_type != GPS_TYPE_INTERNAL_GPSDO)) {
+    if(not gps_detected() || !(gps_type == GPS_TYPE_INTERNAL_GPSDO || gps_type == GPS_TYPE_LEA_M8F)) {
         UHD_MSG(error) << "get_stat(): unsupported GPS or no GPS detected";
         return std::string();
     }
 
-    const std::list<std::string> list = boost::assign::list_of("GPGGA")("GPRMC")("SERVO");
+    std::list<std::string> list = boost::assign::list_of("GPGGA")("GPRMC")("SERVO");
+    const std::list<std::string> list_lea_m8f = boost::assign::list_of("GNGGA")("GNRMC");
+
+    if (gps_type == GPS_TYPE_LEA_M8F) {
+        list = list_lea_m8f;
+    }
+
     static const boost::regex status_regex("\\d\\d-\\d\\d-\\d\\d");
     static const boost::regex gp_msg_regex("^\\$GP.*,\\*[0-9A-F]{2}$");
     std::map<std::string,std::string> msgs;
@@ -168,6 +174,11 @@ public:
         break;
       }
       else if(reply.substr(0, 3) == "$GP") i_heard_some_nmea = true; //but keep looking for that "Command Error" response
+      else if(reply.substr(0, 3) == "$GN") {
+          // The u-blox LEA-M8F outputs $GNGGA and $GNRMC messages
+          gps_type = GPS_TYPE_LEA_M8F;
+          break;
+      }
       else if(reply.length() != 0) i_heard_something_weird = true; //probably wrong baud rate
     }
 
@@ -181,6 +192,11 @@ public:
     case GPS_TYPE_INTERNAL_GPSDO:
       UHD_MSG(status) << "Found an internal GPSDO" << std::endl;
       init_gpsdo();
+      break;
+
+    case GPS_TYPE_LEA_M8F:
+      UHD_MSG(status) << "Found an internal u-blox LEA-M8F GPSDO" << std::endl;
+      init_lea_m8f();
       break;
 
     case GPS_TYPE_GENERIC_NMEA:
@@ -204,6 +220,8 @@ public:
     std::vector<std::string> ret = boost::assign::list_of
         ("gps_gpgga")
         ("gps_gprmc")
+        ("gps_gngga")
+        ("gps_gnrmc")
         ("gps_time")
         ("gps_locked")
         ("gps_servo");
@@ -212,7 +230,9 @@ public:
 
   uhd::sensor_value_t get_sensor(std::string key) {
     if(key == "gps_gpgga"
-    or key == "gps_gprmc") {
+    or key == "gps_gprmc"
+    or key == "gps_gngga"
+    or key == "gps_gnrmc") {
         return sensor_value_t(
                  boost::to_upper_copy(key),
                  get_cached_sensor(boost::to_upper_copy(key.substr(4,8)), GPS_NMEA_NORMAL_FRESHNESS, false, false),
@@ -252,13 +272,17 @@ private:
      sleep(milliseconds(GPSDO_COMMAND_DELAY_MS));
   }
 
+  void init_lea_m8f(void) {
+      // Nothing much to do yet
+  }
+
   //retrieve a raw NMEA sentence
   std::string get_nmea(std::string msgtype) {
     std::string reply;
 
     const boost::system_time comm_timeout = boost::get_system_time() + milliseconds(GPS_COMM_TIMEOUT_MS);
     while(boost::get_system_time() < comm_timeout) {
-        if(!msgtype.compare("GPRMC")) {
+        if(! (msgtype.compare("GPRMC") || msgtype.compare("GNRMC")) ) {
           reply = get_cached_sensor(msgtype, GPS_NMEA_FRESHNESS, true);
         }
         else {
@@ -291,7 +315,13 @@ private:
     ptime gps_time;
     while(error_cnt < 2) {
         try {
-            std::string reply = get_nmea("GPRMC");
+            std::string reply;
+            if (gps_type == GPS_TYPE_LEA_M8F) {
+                reply = get_nmea("GNRMC");
+            }
+            else {
+                reply = get_nmea("GPRMC");
+            }
 
             std::string datestr = get_token(reply, 9);
             std::string timestr = get_token(reply, 1);
@@ -335,7 +365,13 @@ private:
     int error_cnt = 0;
     while(error_cnt < 3) {
         try {
-            std::string reply = get_cached_sensor("GPGGA", GPS_LOCK_FRESHNESS, false, false);
+            std::string reply;
+            if (gps_type == GPS_TYPE_LEA_M8F) {
+               reply = get_cached_sensor("GNGGA", GPS_LOCK_FRESHNESS, false, false);
+            }
+            else {
+               reply = get_cached_sensor("GPGGA", GPS_LOCK_FRESHNESS, false, false);
+            }
             if(reply.size() <= 1) return false;
 
             return (get_token(reply, 6) != "0");
@@ -388,6 +424,7 @@ private:
 
   enum {
     GPS_TYPE_INTERNAL_GPSDO,
+    GPS_TYPE_LEA_M8F,
     GPS_TYPE_GENERIC_NMEA,
     GPS_TYPE_NONE
   } gps_type;
