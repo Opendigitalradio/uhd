@@ -116,8 +116,10 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
   try {
       uhd::sensor_value_t gga_string = usrp->get_mboard_sensor("gps_gpgga");
       uhd::sensor_value_t rmc_string = usrp->get_mboard_sensor("gps_gprmc");
+      uhd::sensor_value_t gngga_string = usrp->get_mboard_sensor("gps_gngga");
+      uhd::sensor_value_t gnrmc_string = usrp->get_mboard_sensor("gps_gnrmc");
       std::cout << boost::format("Printing available NMEA strings:\n");
-      std::cout << boost::format("%s\n%s\n%s\n") % gga_string.to_pp_string() % rmc_string.to_pp_string() % gps_time.to_pp_string();
+      std::cout << boost::format("%s\n%s\n%s\n%s\n%s\n") % gga_string.to_pp_string() % rmc_string.to_pp_string() % gngga_string.to_pp_string() % gnrmc_string.to_pp_string() % gps_time.to_pp_string();
   } catch (std::exception &e) {
       std::cout << "NMEA strings not implemented for this device." << std::endl;
   }
