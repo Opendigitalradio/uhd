@@ -152,12 +152,14 @@ private:
       // Creating a map here because we only want the latest of each message type
       for (std::string msg = _recv(); msg.length() > 6; msg = _recv())
       {
+        /*
         std::stringstream ss;
         ss << "Got message ";
         for (size_t m = 0; m < msg.size(); m++) {
           ss << std::hex << (unsigned int)(unsigned char)msg[m] << " " << std::dec;
         }
         UHD_MSG(warning) << ss.str() << ":" << std::endl << msg << std::endl;
+        */
         // Get UBX-NAV-SOL
         const uint8_t nav_sol_head[4] = {0xb5, 0x62, 0x01, 0x06};
         const std::string nav_sol_head_str(reinterpret_cast<const char *>(nav_sol_head), 4);
@@ -197,7 +199,7 @@ private:
 
             std::string next_msg = msg.substr(52+8);
 
-            UHD_MSG(warning) << "Next message " << next_msg << std::endl;
+            //UHD_MSG(warning) << "Next message " << next_msg << std::endl;
             if (next_msg.find("$") == 0) {
               msgs[next_msg.substr(1,5)] = next_msg;
             }
@@ -252,7 +254,7 @@ public:
     const boost::system_time comm_timeout = boost::get_system_time() + milliseconds(GPS_COMM_TIMEOUT_MS);
     while(boost::get_system_time() < comm_timeout) {
       reply = _recv();
-      UHD_MSG(warning) << "Received " << reply << std::endl;
+      //UHD_MSG(warning) << "Received " << reply << std::endl;
       if(reply.find("Command Error") != std::string::npos) {
         gps_type = GPS_TYPE_INTERNAL_GPSDO;
         break;
