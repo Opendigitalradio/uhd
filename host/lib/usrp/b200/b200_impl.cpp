@@ -704,10 +704,25 @@ b200_impl::b200_impl(const uhd::device_addr_t& device_addr, usb_device_handle::s
         _radio_perifs[i].ddc->set_host_rate(default_tick_rate / ad936x_manager::DEFAULT_DECIM);
         _radio_perifs[i].duc->set_host_rate(default_tick_rate / ad936x_manager::DEFAULT_INTERP);
     }
+
     // We can automatically choose a master clock rate, but not if the user specifies one
     _tree->access<bool>(mb_path / "auto_tick_rate").set(not device_addr.has_key("master_clock_rate"));
     if (not device_addr.has_key("master_clock_rate")) {
         UHD_MSG(status) << "Setting master clock rate selection to 'automatic'." << std::endl;
+    }
+
+    //GPS installed: use external ref, time, and init time spec
+    if (_gps and _gps->gps_detected())
+    {
+        UHD_MSG(status) << "Setting references to the internal GPSDO" << std::endl;
+        _tree->access<std::string>(mb_path / "time_source" / "value").set("gpsdo");
+        _tree->access<std::string>(mb_path / "clock_source" / "value").set("gpsdo");
+
+        if (not _gps->gps_detected_lea_m8f()) {
+          UHD_MSG(status) << "Initializing time to the internal GPSDO" << std::endl;
+          const time_t tp = time_t(_gps->get_sensor("gps_time").to_int()+1);
+          _tree->access<time_spec_t>(mb_path / "time" / "pps").set(time_spec_t(tp));
+        }
     }
 
 }
