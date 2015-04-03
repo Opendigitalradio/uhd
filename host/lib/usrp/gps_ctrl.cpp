@@ -62,7 +62,7 @@ private:
           return update_cached_sensors(sensor);
       }
     } catch(std::exception &e) {
-      UHD_MSG(warning) << "get_cached_sensor: " << e.what();
+      UHD_MSG(warning) << "get_cached_sensor: " << e.what() << std::endl;
     }
     return std::string();
   }
@@ -89,64 +89,144 @@ private:
     }
 
   std::string update_cached_sensors(const std::string sensor) {
-    if(not gps_detected() || !(gps_type == GPS_TYPE_INTERNAL_GPSDO || gps_type == GPS_TYPE_LEA_M8F)) {
-        UHD_MSG(error) << "get_stat(): unsupported GPS or no GPS detected";
-        return std::string();
-    }
+    if (gps_detected() && gps_type == GPS_TYPE_INTERNAL_GPSDO) {
 
-    std::list<std::string> list = boost::assign::list_of("GPGGA")("GPRMC")("SERVO");
-    const std::list<std::string> list_lea_m8f = boost::assign::list_of("GNGGA")("GNRMC");
+      const std::list<std::string> list = boost::assign::list_of("GPGGA")("GPRMC")("SERVO");
 
-    if (gps_type == GPS_TYPE_LEA_M8F) {
-        list = list_lea_m8f;
-    }
+      static const boost::regex status_regex("\\d\\d-\\d\\d-\\d\\d");
+      static const boost::regex gp_msg_regex("^\\$GP.*,\\*[0-9A-F]{2}$");
+      std::map<std::string,std::string> msgs;
 
-    static const boost::regex status_regex("\\d\\d-\\d\\d-\\d\\d");
-    static const boost::regex gp_msg_regex("^\\$GP.*,\\*[0-9A-F]{2}$");
-    std::map<std::string,std::string> msgs;
+      // Get all GPSDO messages available
+      // Creating a map here because we only want the latest of each message type
+      for (std::string msg = _recv(); msg.length(); msg = _recv())
+      {
+          // Strip any end of line characters
+          erase_all(msg, "\r");
+          erase_all(msg, "\n");
 
-    // Get all GPSDO messages available
-    // Creating a map here because we only want the latest of each message type
-    for (std::string msg = _recv(); msg.length(); msg = _recv())
-    {
-        // Strip any end of line characters
-        erase_all(msg, "\r");
-        erase_all(msg, "\n");
+          if (msg.length() < 6)
+          {
+              UHD_LOGV(regularly) << __FUNCTION__ << ": Short NMEA string: " << msg << std::endl;
+              continue;
+          }
 
-        if (msg.length() < 6)
-        {
-            UHD_LOGV(regularly) << __FUNCTION__ << ": Short NMEA string: " << msg << std::endl;
-            continue;
-        }
+          // Look for SERVO message
+          if (boost::regex_search(msg, status_regex, boost::regex_constants::match_continuous))
+          {
+              msgs["SERVO"] = msg;
+          }
+          else if (boost::regex_match(msg, gp_msg_regex) and is_nmea_checksum_ok(msg))
+          {
+              msgs[msg.substr(1,5)] = msg;
+          }
+          else
+          {
+              UHD_LOGV(regularly) << __FUNCTION__ << ": Malformed NMEA string: " << msg << std::endl;
+          }
+      }
 
-        // Look for SERVO message
-        if (boost::regex_search(msg, status_regex, boost::regex_constants::match_continuous))
-        {
-            msgs["SERVO"] = msg;
-        }
-        else if (boost::regex_match(msg, gp_msg_regex) and is_nmea_checksum_ok(msg))
-        {
-            msgs[msg.substr(1,5)] = msg;
-        }
-        else
-        {
-            UHD_LOGV(regularly) << __FUNCTION__ << ": Malformed NMEA string: " << msg << std::endl;
-        }
-    }
+      boost::system_time time = boost::get_system_time();
 
-    boost::system_time time = boost::get_system_time();
-
-    // Update sensors with newly read data
-    BOOST_FOREACH(std::string key, list) {
+      // Update sensors with newly read data
+      BOOST_FOREACH(std::string key, list) {
         if (msgs[key].length())
-            sensors[key] = boost::make_tuple(msgs[key], time, !sensor.compare(key));
-    }
+          sensors[key] = boost::make_tuple(msgs[key], time, !sensor.compare(key));
+      }
 
-    // Return requested sensor if it was updated
-    if (msgs[sensor].length())
+      // Return requested sensor if it was updated
+      if (msgs[sensor].length())
         return msgs[sensor];
 
-    return std::string();
+      return std::string();
+    }
+    else if (gps_detected() && gps_type == GPS_TYPE_LEA_M8F) {
+      const std::list<std::string> list = boost::assign::list_of("GNGGA")("GNRMC")("FIXTYPE");
+
+      // We try to receive the some UBX messages to find out if the clock is disciplined
+      std::string msg = _recv();
+
+      std::map<std::string,std::string> msgs;
+
+      // Get all GPSDO messages available
+      // Creating a map here because we only want the latest of each message type
+      for (std::string msg = _recv(); msg.length() > 6; msg = _recv())
+      {
+        std::stringstream ss;
+        ss << "Got message ";
+        for (size_t m = 0; m < msg.size(); m++) {
+          ss << std::hex << (unsigned int)(unsigned char)msg[m] << " " << std::dec;
+        }
+        UHD_MSG(warning) << ss.str() << ":" << std::endl << msg << std::endl;
+        // Get UBX-NAV-SOL
+        const uint8_t nav_sol_head[4] = {0xb5, 0x62, 0x01, 0x06};
+        const std::string nav_sol_head_str(reinterpret_cast<const char *>(nav_sol_head), 4);
+        if (msg.find(nav_sol_head_str) == 0) {
+          if (msg.length() > 52 + 8) {
+            ubx_nav_sol_t nav_sol;
+            memcpy(&nav_sol, msg.c_str(), sizeof(nav_sol));
+
+            UHD_MSG(warning) << "Got NAV-SOL " << nav_sol.itow << ", "
+                             << (int)nav_sol.numSV << " SVs, flags "
+                             << (int)nav_sol.Flags << std::endl;
+
+            std::string fixtype;
+
+            if (nav_sol.GPSfix == 0) {
+              fixtype = "no fix";
+            }
+            else if (nav_sol.GPSfix == 1) {
+              fixtype = "dead reckoning";
+            }
+            else if (nav_sol.GPSfix == 2) {
+              fixtype = "2d fix";
+            }
+            else if (nav_sol.GPSfix == 3) {
+              fixtype = "3d fix";
+            }
+            else if (nav_sol.GPSfix == 4) {
+              fixtype = "combined fix";
+            }
+            else if (nav_sol.GPSfix == 5) {
+              fixtype = "time-only fix";
+            }
+
+            if (not fixtype.empty()) {
+              msgs["FIXTYPE"] = fixtype;
+            }
+
+            std::string next_msg = msg.substr(52+8);
+
+            UHD_MSG(warning) << "Next message " << next_msg << std::endl;
+            if (next_msg.find("$") == 0) {
+              msgs[next_msg.substr(1,5)] = next_msg;
+            }
+          }
+        }
+        else {
+          msgs[msg.substr(1,5)] = msg;
+        }
+      }
+
+      boost::system_time time = boost::get_system_time();
+
+      // Update sensors with newly read data
+      BOOST_FOREACH(std::string key, list) {
+        if (msgs[key].length()) {
+          sensors[key] = boost::make_tuple(msgs[key], time, !sensor.compare(key));
+        }
+      }
+
+      // Return requested sensor if it was updated
+      if (msgs[sensor].length())
+        return msgs[sensor];
+
+      return std::string();
+    }
+    else {
+      UHD_MSG(error) << "get_stat(): unsupported GPS or no GPS detected" << std::endl;
+      return std::string();
+    }
   }
 
 public:
@@ -162,6 +242,9 @@ public:
     _flush(); //get whatever junk is in the rx buffer right now, and throw it away
     _send("HAAAY GUYYYYS\n"); //to elicit a response from the GPSDO
 
+    // try to init LEA-M8F
+    init_lea_m8f();
+
     //wait for _send(...) to return
     sleep(milliseconds(GPSDO_STUPID_DELAY_MS));
 
@@ -169,14 +252,16 @@ public:
     const boost::system_time comm_timeout = boost::get_system_time() + milliseconds(GPS_COMM_TIMEOUT_MS);
     while(boost::get_system_time() < comm_timeout) {
       reply = _recv();
+      UHD_MSG(warning) << "Received " << reply << std::endl;
       if(reply.find("Command Error") != std::string::npos) {
         gps_type = GPS_TYPE_INTERNAL_GPSDO;
         break;
       }
       else if(reply.substr(0, 3) == "$GP") i_heard_some_nmea = true; //but keep looking for that "Command Error" response
-      else if(reply.substr(0, 3) == "$GN") {
-          // The u-blox LEA-M8F outputs $GNGGA and $GNRMC messages
+      else if(reply.substr(0, 2) == "\xB5""\x62") {
+          // The u-blox LEA-M8F outputs UBX protocol messages
           gps_type = GPS_TYPE_LEA_M8F;
+          i_heard_some_nmea = false;
           break;
       }
       else if(reply.length() != 0) i_heard_something_weird = true; //probably wrong baud rate
@@ -224,7 +309,8 @@ public:
         ("gps_gnrmc")
         ("gps_time")
         ("gps_locked")
-        ("gps_servo");
+        ("gps_servo")
+        ("gps_fixtype");
     return ret;
   }
 
@@ -232,7 +318,8 @@ public:
     if(key == "gps_gpgga"
     or key == "gps_gprmc"
     or key == "gps_gngga"
-    or key == "gps_gnrmc") {
+    or key == "gps_gnrmc"
+    or key == "gps_fixtype" ) {
         return sensor_value_t(
                  boost::to_upper_copy(key),
                  get_cached_sensor(boost::to_upper_copy(key.substr(4,8)), GPS_NMEA_NORMAL_FRESHNESS, false, false),
@@ -273,7 +360,9 @@ private:
   }
 
   void init_lea_m8f(void) {
-      // Nothing much to do yet
+      // Enable the UBX-NAV-SOL message:
+      const uint8_t en_nav_sol[11] = {0xb5, 0x62, 0x06, 0x01, 0x03, 0x00, 0x01, 0x06, 0x01, 0x12, 0x4f};
+      _send(std::string(reinterpret_cast<const char *>(en_nav_sol), 11));
   }
 
   //retrieve a raw NMEA sentence
@@ -343,7 +432,7 @@ private:
             return gps_time;
 
         } catch(std::exception &e) {
-            UHD_MSG(warning) << "get_time: " << e.what();
+            UHD_MSG(warning) << "get_time: " << e.what() << std::endl;
             _flush();
             error_cnt++;
         }
@@ -357,6 +446,10 @@ private:
       return (get_time() - from_time_t(0)).total_seconds();
   }
 
+  bool gps_detected_lea_m8f(void) {
+    return (gps_type == GPS_TYPE_LEA_M8F);
+  }
+
   bool gps_detected(void) {
     return (gps_type != GPS_TYPE_NONE);
   }
@@ -367,16 +460,18 @@ private:
         try {
             std::string reply;
             if (gps_type == GPS_TYPE_LEA_M8F) {
-               reply = get_cached_sensor("GNGGA", GPS_LOCK_FRESHNESS, false, false);
+               reply = get_cached_sensor("FIXTYPE", GPS_LOCK_FRESHNESS, false, false);
+               UHD_MSG(warning) << "FIXTYPE is " << reply << std::endl;
+               return reply == "3d fix";
             }
             else {
                reply = get_cached_sensor("GPGGA", GPS_LOCK_FRESHNESS, false, false);
+               if(reply.size() <= 1) return false;
+               return (get_token(reply, 6) != "0");
             }
-            if(reply.size() <= 1) return false;
 
-            return (get_token(reply, 6) != "0");
         } catch(std::exception &e) {
-            UHD_MSG(warning) << "locked: " << e.what();
+            UHD_MSG(warning) << "locked: " << e.what() << std::endl;
             error_cnt++;
         }
     }
@@ -429,7 +524,7 @@ private:
     GPS_TYPE_NONE
   } gps_type;
 
-  static const int GPS_COMM_TIMEOUT_MS = 1300;
+  static const int GPS_COMM_TIMEOUT_MS = 2300;
   static const int GPS_NMEA_FRESHNESS = 10;
   static const int GPS_NMEA_LOW_FRESHNESS = 2500;
   static const int GPS_NMEA_NORMAL_FRESHNESS = 1000;

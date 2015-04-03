@@ -323,7 +323,7 @@ b200_impl::b200_impl(const device_addr_t &device_addr)
     // Create the GPSDO control
     ////////////////////////////////////////////////////////////////////
     _async_task_data->gpsdo_uart = b200_uart::make(_ctrl_transport, B200_TX_GPS_UART_SID);
-    _async_task_data->gpsdo_uart->set_baud_divider(B200_BUS_CLOCK_RATE/115200);
+    _async_task_data->gpsdo_uart->set_baud_divider(B200_BUS_CLOCK_RATE/9600);
     _async_task_data->gpsdo_uart->write_uart("\n"); //cause the baud and response to be setup
     boost::this_thread::sleep(boost::posix_time::seconds(1)); //allow for a little propagation
 
@@ -524,9 +524,12 @@ b200_impl::b200_impl(const device_addr_t &device_addr)
         UHD_MSG(status) << "Setting references to the internal GPSDO" << std::endl;
         _tree->access<std::string>(mb_path / "time_source" / "value").set("gpsdo");
         _tree->access<std::string>(mb_path / "clock_source" / "value").set("gpsdo");
-        UHD_MSG(status) << "Initializing time to the internal GPSDO" << std::endl;
-        const time_t tp = time_t(_gps->get_sensor("gps_time").to_int()+1);
-        _tree->access<time_spec_t>(mb_path / "time" / "pps").set(time_spec_t(tp));
+
+        if (not _gps->gps_detected_lea_m8f()) {
+          UHD_MSG(status) << "Initializing time to the internal GPSDO" << std::endl;
+          const time_t tp = time_t(_gps->get_sensor("gps_time").to_int()+1);
+          _tree->access<time_spec_t>(mb_path / "time" / "pps").set(time_spec_t(tp));
+        }
     } else {
         //init to internal clock and time source
         _tree->access<std::string>(mb_path / "clock_source/value").set("internal");
