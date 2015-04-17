@@ -64,30 +64,6 @@ public:
 
 };
 
-/*! The UBX-NAV-SOL message structure from the
- *  u-blox UBX protocol
- */
-struct ubx_nav_sol_t
-{
-    uint32_t  itow;           // ms GPS Millisecond Time of Week
-    int32_t   frac;           // ns remainder of rounded ms above
-    int16_t   week;           // GPS week
-    uint8_t   GPSfix;         // GPSfix Type, range 0..6
-    uint8_t   Flags;          // Navigation Status Flags
-    int32_t   ECEF_X;         // cm ECEF X coordinate
-    int32_t   ECEF_Y;         // cm ECEF Y coordinate
-    int32_t   ECEF_Z;         // cm ECEF Z coordinate
-    int32_t   PAcc;           // cm 3D Position Accuracy Estimate
-    int32_t   ECEFVX;         // cm/s ECEF X velocity
-    int32_t   ECEFVY;         // cm/s ECEF Y velocity
-    int32_t   ECEFVZ;         // cm/s ECEF Z velocity
-    uint32_t  SAcc;           // cm/s Speed Accuracy Estimate
-    uint16_t  PDOP;           // 0.01 Position DOP
-    uint8_t   res1;           // reserved
-    uint8_t   numSV;          // Number of SVs used in navigation solution
-    uint32_t  res2;           // reserved
-} __attribute__((packed));
-
 } //namespace uhd
 
 #endif /* INCLUDED_GPS_CTRL_HPP */
