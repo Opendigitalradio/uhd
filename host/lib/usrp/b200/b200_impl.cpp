@@ -323,7 +323,7 @@ b200_impl::b200_impl(const device_addr_t &device_addr)
     // Create the GPSDO control
     ////////////////////////////////////////////////////////////////////
     _async_task_data->gpsdo_uart = b200_uart::make(_ctrl_transport, B200_TX_GPS_UART_SID);
-    _async_task_data->gpsdo_uart->set_baud_divider(B200_BUS_CLOCK_RATE/9600);
+    _async_task_data->gpsdo_uart->set_baud_divider(B200_BUS_CLOCK_RATE/115200);
     _async_task_data->gpsdo_uart->write_uart("\n"); //cause the baud and response to be setup
     boost::this_thread::sleep(boost::posix_time::seconds(1)); //allow for a little propagation
 
