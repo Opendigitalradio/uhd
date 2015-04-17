@@ -124,6 +124,10 @@ class gps_ctrl_parser {
     size_t size() { return gps_data_input.size(); }
 };
 
+gps_ctrl::~gps_ctrl(void){
+    /* NOP */
+}
+
 /*!
  * A control for GPSDO devices
  */
