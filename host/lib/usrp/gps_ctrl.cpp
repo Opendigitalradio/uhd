@@ -39,16 +39,99 @@ using namespace boost::algorithm;
 using namespace boost::this_thread;
 
 /*!
+ * A NMEA and UBX parser for the GPS serial interface.
+ */
+class gps_ctrl_parser {
+  private:
+    std::deque<char> gps_data_input;
+
+    std::string parse_ubx()
+    {
+      // Assumptions:
+      // The deque now contains an UBX message in the format
+      //  \xb6\x62<CLASS><ID><LEN><PAYLOAD><CRC>
+      // where
+      //  <CLASS> is 1 byte
+      //  <ID>    is 1 byte
+      //  <LEN>   is 2 bytes (little-endian), length of <PAYLOAD>
+      //  <CRC>   is 2 bytes
+
+      if (gps_data_input.size() >= 8) {
+        uint8_t len_lo = gps_data_input[4];
+        uint8_t len_hi = gps_data_input[5];
+        size_t len     = len_lo | (len_hi << 8);
+
+        if (gps_data_input.size() >= len + 8) {
+          std::string msg(gps_data_input.begin(), gps_data_input.begin() + (len + 8));
+          gps_data_input.erase(gps_data_input.begin(), gps_data_input.begin() + (len + 8));
+          return msg;
+        }
+      }
+
+      return std::string();
+    }
+
+    std::string parse_nmea()
+    {
+      // Assumptions:
+      // The deque now contains an NMEA message in the format
+      //  $G.................*XX<CR><LF>
+      // the checksum XX is dropped from the message
+
+      std::deque<char>::iterator star;
+      star = std::find(gps_data_input.begin() + 2, gps_data_input.end(), '*');
+      if (star != gps_data_input.end()) {
+        std::string msg(gps_data_input.begin(), star);
+
+        // The parser will take care of the leftover *XX<CR><LF>
+        gps_data_input.erase(gps_data_input.begin(), star);
+        return msg;
+      }
+
+      return std::string();
+    }
+
+  public:
+    template <class InputIterator>
+      void push_data(InputIterator first, InputIterator last)
+      {
+        gps_data_input.insert(gps_data_input.end(), first, last);
+      }
+
+    std::string get_next_message()
+    {
+      if (gps_data_input.size() >= 2) {
+        do {
+          char header1 = gps_data_input[0];
+          char header2 = gps_data_input[1];
+
+          if (header1 == '$' and header2 == 'G') {
+            return parse_nmea();
+          }
+          else if (header1 == '\xb5' and header2 == '\x62') {
+            return parse_ubx();
+          }
+
+          gps_data_input.pop_front();
+          if (gps_data_input.size() < 2) {
+            break;
+          }
+        } while (true);
+      }
+      return std::string();
+    }
+
+    size_t size() { return gps_data_input.size(); }
+};
+
+/*!
  * A control for GPSDO devices
  */
-
-gps_ctrl::~gps_ctrl(void){
-    /* NOP */
-}
-
 class gps_ctrl_impl : public gps_ctrl{
 private:
   std::map<std::string, boost::tuple<std::string, boost::system_time, bool> > sensors;
+
+  gps_ctrl_parser gps_parser;
 
   std::string get_cached_sensor(const std::string sensor, const int freshness, const bool once, const bool touch=true) {
     boost::system_time time = boost::get_system_time();
@@ -143,14 +226,19 @@ private:
     else if (gps_detected() && gps_type == GPS_TYPE_LEA_M8F) {
       const std::list<std::string> list = boost::assign::list_of("GNGGA")("GNRMC")("FIXTYPE");
 
-      // We try to receive the some UBX messages to find out if the clock is disciplined
-      std::string msg = _recv();
+      // Concatenate all incoming data into the deque
+      for (std::string msg = _recv();
+          msg.length() > 0 && gps_parser.size() < (2*115200);
+          msg = _recv())
+      {
+        gps_parser.push_data(msg.begin(), msg.end());
+      }
 
       std::map<std::string,std::string> msgs;
 
       // Get all GPSDO messages available
       // Creating a map here because we only want the latest of each message type
-      for (std::string msg = _recv(); msg.length() > 6; msg = _recv())
+      for (std::string msg = gps_parser.get_next_message(); not msg.empty(); msg = gps_parser.get_next_message())
       {
         /*
         std::stringstream ss;
@@ -160,53 +248,49 @@ private:
         }
         UHD_MSG(warning) << ss.str() << ":" << std::endl << msg << std::endl;
         */
+
         // Get UBX-NAV-SOL
         const uint8_t nav_sol_head[4] = {0xb5, 0x62, 0x01, 0x06};
         const std::string nav_sol_head_str(reinterpret_cast<const char *>(nav_sol_head), 4);
-        if (msg.find(nav_sol_head_str) == 0) {
-          if (msg.length() > 52 + 8) {
-            ubx_nav_sol_t nav_sol;
-            memcpy(&nav_sol, msg.c_str(), sizeof(nav_sol));
+        if (msg.find(nav_sol_head_str) == 0 and msg.length() == 52 + 8) {
+          uint8_t gpsFix = msg[6 + 10]; // header size == 6, field offset == 10
 
-            UHD_MSG(warning) << "Got NAV-SOL " << nav_sol.itow << ", "
-                             << (int)nav_sol.numSV << " SVs, flags "
-                             << (int)nav_sol.Flags << std::endl;
+          std::string fixtype;
 
-            std::string fixtype;
+          if (gpsFix == 0) {
+            fixtype = "no fix";
+          }
+          else if (gpsFix == 1) {
+            fixtype = "dead reckoning";
+          }
+          else if (gpsFix == 2) {
+            fixtype = "2d fix";
+          }
+          else if (gpsFix == 3) {
+            fixtype = "3d fix";
+          }
+          else if (gpsFix == 4) {
+            fixtype = "combined fix";
+          }
+          else if (gpsFix == 5) {
+            fixtype = "time-only fix";
+          }
 
-            if (nav_sol.GPSfix == 0) {
-              fixtype = "no fix";
-            }
-            else if (nav_sol.GPSfix == 1) {
-              fixtype = "dead reckoning";
-            }
-            else if (nav_sol.GPSfix == 2) {
-              fixtype = "2d fix";
-            }
-            else if (nav_sol.GPSfix == 3) {
-              fixtype = "3d fix";
-            }
-            else if (nav_sol.GPSfix == 4) {
-              fixtype = "combined fix";
-            }
-            else if (nav_sol.GPSfix == 5) {
-              fixtype = "time-only fix";
-            }
-
-            if (not fixtype.empty()) {
-              msgs["FIXTYPE"] = fixtype;
-            }
-
-            std::string next_msg = msg.substr(52+8);
-
-            //UHD_MSG(warning) << "Next message " << next_msg << std::endl;
-            if (next_msg.find("$") == 0) {
-              msgs[next_msg.substr(1,5)] = next_msg;
-            }
+          if (not fixtype.empty()) {
+            msgs["FIXTYPE"] = fixtype;
           }
         }
-        else {
+        else if (msg[0] == '$') {
           msgs[msg.substr(1,5)] = msg;
+        }
+        else if (msg[0] == '\xb5' and msg[1] == '\x62') { /* Ignore unsupported UBX message */ }
+        else {
+          std::stringstream ss;
+          ss << "Unknown message ";
+          for (size_t m = 0; m < msg.size(); m++) {
+            ss << std::hex << (unsigned int)(unsigned char)msg[m] << " " << std::dec;
+          }
+          UHD_MSG(warning) << ss.str() << ":" << std::endl << msg << std::endl;
         }
       }
 
@@ -260,7 +344,8 @@ public:
         break;
       }
       else if(reply.substr(0, 3) == "$GP") i_heard_some_nmea = true; //but keep looking for that "Command Error" response
-      else if(reply.substr(0, 2) == "\xB5""\x62") {
+      else if(reply.substr(0, 2) == "\xB5""\x62" or
+              reply.substr(0, 3) == "$GN" ) {
           // The u-blox LEA-M8F outputs UBX protocol messages
           gps_type = GPS_TYPE_LEA_M8F;
           i_heard_some_nmea = false;
@@ -362,9 +447,12 @@ private:
   }
 
   void init_lea_m8f(void) {
-      // Enable the UBX-NAV-SOL message:
+      // Enable the UBX-NAV-SOL and the $GNRMC messages
       const uint8_t en_nav_sol[11] = {0xb5, 0x62, 0x06, 0x01, 0x03, 0x00, 0x01, 0x06, 0x01, 0x12, 0x4f};
-      _send(std::string(reinterpret_cast<const char *>(en_nav_sol), 11));
+      _send(std::string(reinterpret_cast<const char *>(en_nav_sol), sizeof(en_nav_sol)));
+
+      const uint8_t en_gnrmc[11]   = {0xb5, 0x62, 0x06, 0x01, 0x03, 0x00, 0xf0, 0x04, 0x01, 0xff, 0x18};
+      _send(std::string(reinterpret_cast<const char *>(en_gnrmc), sizeof(en_gnrmc)));
   }
 
   //retrieve a raw NMEA sentence
