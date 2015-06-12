@@ -61,8 +61,6 @@ class gps_ctrl_parser {
 
 
       if (gps_data_input.size() >= 8) {
-        uint8_t msg_class = gps_data_input[2];
-        uint8_t msg_id    = gps_data_input[3];
         uint8_t len_lo = gps_data_input[4];
         uint8_t len_hi = gps_data_input[5];
         size_t len     = len_lo | (len_hi << 8);
