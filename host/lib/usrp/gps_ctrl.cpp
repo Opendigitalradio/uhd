@@ -56,15 +56,42 @@ class gps_ctrl_parser {
       //  <LEN>   is 2 bytes (little-endian), length of <PAYLOAD>
       //  <CRC>   is 2 bytes
 
+      uint8_t ck_a = 0;
+      uint8_t ck_b = 0;
+
+
       if (gps_data_input.size() >= 8) {
+        uint8_t msg_class = gps_data_input[2];
+        uint8_t msg_id    = gps_data_input[3];
         uint8_t len_lo = gps_data_input[4];
         uint8_t len_hi = gps_data_input[5];
         size_t len     = len_lo | (len_hi << 8);
 
         if (gps_data_input.size() >= len + 8) {
+          /*
+          std::cerr << "DATA: ";
+          for (size_t i=0; i < gps_data_input.size(); i++) {
+            uint8_t dat = gps_data_input[i];
+            std::cerr << boost::format("%02x ") % (unsigned int)dat;
+          }
+          std::cerr << std::endl;
+          */
+
+          uint8_t ck_a_packet = gps_data_input[len+6];
+          uint8_t ck_b_packet = gps_data_input[len+7];
+
+          // Range over which CRC is calculated is <CLASS><ID><LEN><PAYLOAD>
+          for (size_t i = 2; i < len+6; i++) {
+            ck_a += (uint8_t)(gps_data_input[i]);
+            ck_b += ck_a;
+          }
+
           std::string msg(gps_data_input.begin(), gps_data_input.begin() + (len + 8));
           gps_data_input.erase(gps_data_input.begin(), gps_data_input.begin() + (len + 8));
-          return msg;
+
+          if (ck_a == ck_a_packet and ck_b == ck_b_packet) {
+            return msg;
+          }
         }
       }
 
@@ -100,23 +127,25 @@ class gps_ctrl_parser {
 
     std::string get_next_message()
     {
-      if (gps_data_input.size() >= 2) {
-        do {
-          char header1 = gps_data_input[0];
-          char header2 = gps_data_input[1];
+      while (gps_data_input.size() >= 2) {
+        char header1 = gps_data_input[0];
+        char header2 = gps_data_input[1];
 
-          if (header1 == '$' and header2 == 'G') {
-            return parse_nmea();
-          }
-          else if (header1 == '\xb5' and header2 == '\x62') {
-            return parse_ubx();
-          }
+        std::string parsed;
 
+        if (header1 == '$' and header2 == 'G') {
+          parsed = parse_nmea();
+        }
+        else if (header1 == '\xb5' and header2 == '\x62') {
+          parsed = parse_ubx();
+        }
+
+        if (parsed.empty()) {
           gps_data_input.pop_front();
-          if (gps_data_input.size() < 2) {
-            break;
-          }
-        } while (true);
+        }
+        else {
+          return parsed;
+        }
       }
       return std::string();
     }
