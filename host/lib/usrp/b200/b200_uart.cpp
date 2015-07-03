@@ -80,7 +80,6 @@ struct b200_uart_impl : b200_uart
         char ch = '\0';
         while (_char_queue.pop_with_timed_wait(ch, timeout))
         {
-            if (ch == '\r') continue;
             line += std::string(&ch, 1);
             if (ch == '\n') return line;
         }
