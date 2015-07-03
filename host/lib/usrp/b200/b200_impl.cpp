@@ -525,9 +525,11 @@ b200_impl::b200_impl(const device_addr_t &device_addr)
         _tree->access<std::string>(mb_path / "time_source" / "value").set("gpsdo");
         _tree->access<std::string>(mb_path / "clock_source" / "value").set("gpsdo");
 
-        UHD_MSG(status) << "Initializing time to the internal GPSDO" << std::endl;
-        const time_t tp = time_t(_gps->get_sensor("gps_time").to_int()+1);
-        _tree->access<time_spec_t>(mb_path / "time" / "pps").set(time_spec_t(tp));
+        if (not _gps->gps_detected_lea_m8f()) {
+            UHD_MSG(status) << "Initializing time to the internal GPSDO" << std::endl;
+            const time_t tp = time_t(_gps->get_sensor("gps_time").to_int()+1);
+            _tree->access<time_spec_t>(mb_path / "time" / "pps").set(time_spec_t(tp));
+        }
     } else {
         //init to internal clock and time source
         _tree->access<std::string>(mb_path / "clock_source/value").set("internal");

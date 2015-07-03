@@ -255,12 +255,10 @@ private:
       return std::string();
     }
     else if (gps_detected() && gps_type == GPS_TYPE_LEA_M8F) {
-      const std::list<std::string> list = boost::assign::list_of("GNGGA")("GNRMC")("FIXTYPE");
+      const std::list<std::string> list = boost::assign::list_of("GNGGA")("GNRMC")("TIMELOCK");
 
       // Concatenate all incoming data into the deque
-      for (std::string msg = _recv();
-          msg.length() > 0 && gps_parser.size() < (2*115200);
-          msg = _recv())
+      for (std::string msg = _recv(); msg.length() > 0; msg = _recv())
       {
         gps_parser.push_data(msg.begin(), msg.end());
       }
@@ -272,47 +270,62 @@ private:
       for (std::string msg = gps_parser.get_next_message(); not msg.empty(); msg = gps_parser.get_next_message())
       {
         /*
-        std::stringstream ss;
-        ss << "Got message ";
-        for (size_t m = 0; m < msg.size(); m++) {
-          ss << std::hex << (unsigned int)(unsigned char)msg[m] << " " << std::dec;
+        if (msg[0] != '$') {
+          std::stringstream ss;
+          ss << "Got message ";
+          for (size_t m = 0; m < msg.size(); m++) {
+            ss << std::hex << (unsigned int)(unsigned char)msg[m] << " " << std::dec;
+          }
+          UHD_MSG(warning) << ss.str() << ":" << std::endl;
         }
-        UHD_MSG(warning) << ss.str() << ":" << std::endl << msg << std::endl;
-        */
+        // */
 
-        // Get UBX-NAV-SOL
-        const uint8_t nav_sol_head[4] = {0xb5, 0x62, 0x01, 0x06};
-        const std::string nav_sol_head_str(reinterpret_cast<const char *>(nav_sol_head), 4);
-        if (msg.find(nav_sol_head_str) == 0 and msg.length() == 52 + 8) {
-          uint8_t gpsFix = msg[6 + 10]; // header size == 6, field offset == 10
+        const uint8_t tim_tos_head[4] = {0xb5, 0x62, 0x0D, 0x12};
+        const std::string tim_tos_head_str(reinterpret_cast<const char *>(tim_tos_head), 4);
 
-          std::string fixtype;
-
-          if (gpsFix == 0) {
-            fixtype = "no fix";
-          }
-          else if (gpsFix == 1) {
-            fixtype = "dead reckoning";
-          }
-          else if (gpsFix == 2) {
-            fixtype = "2d fix";
-          }
-          else if (gpsFix == 3) {
-            fixtype = "3d fix";
-          }
-          else if (gpsFix == 4) {
-            fixtype = "combined fix";
-          }
-          else if (gpsFix == 5) {
-            fixtype = "time-only fix";
-          }
-
-          if (not fixtype.empty()) {
-            msgs["FIXTYPE"] = fixtype;
-          }
-        }
-        else if (msg[0] == '$') {
+        // Try to get NMEA first
+        if (msg[0] == '$') {
           msgs[msg.substr(1,5)] = msg;
+        }
+        else if (msg.find(tim_tos_head_str) == 0 and msg.length() == 56 + 8) {
+            // header size == 6, field offset == 4, 32-bit field
+            uint8_t flags1 = msg[6 + 4];
+            uint8_t flags2 = msg[6 + 5];
+            uint8_t flags3 = msg[6 + 5];
+            uint8_t flags4 = msg[6 + 5];
+
+            uint32_t flags = flags1 | (flags2 << 8) | (flags3 << 16) | (flags4 << 24);
+            /* bits in flags are:
+               leapNow 0
+               leapSoon 1
+               leapPositive 2
+               timeInLimit 3
+               intOscInLimit 4
+               extOscInLimit 5
+               gnssTimeValid 6
+               UTCTimeValid 7
+               DiscSrc 10
+               raim 11
+               cohPulse 12
+               lockedPulse 13
+               */
+
+            bool lockedPulse   = (flags & (1 << 13));
+            bool timeInLimit   = (flags & (1 << 3));
+            bool intOscInLimit = (flags & (1 << 4));
+
+            if (lockedPulse and timeInLimit and intOscInLimit) {
+                msgs["TIMELOCK"] = "TIME LOCKED";
+            }
+            else {
+                std::stringstream ss;
+                ss <<
+                (lockedPulse   ? "" : "no" ) << "lockedPulse " <<
+                (timeInLimit   ? "" : "no" ) << "timeInLimit " <<
+                (intOscInLimit ? "" : "no" ) << "intOscInLimit ";
+
+                msgs["TIMELOCK"] = ss.str();
+            }
         }
         else if (msg[0] == '\xb5' and msg[1] == '\x62') { /* Ignore unsupported UBX message */ }
         else {
@@ -428,7 +441,7 @@ public:
         ("gps_time")
         ("gps_locked")
         ("gps_servo")
-        ("gps_fixtype");
+        ("gps_timelock");
     return ret;
   }
 
@@ -437,7 +450,7 @@ public:
     or key == "gps_gprmc"
     or key == "gps_gngga"
     or key == "gps_gnrmc"
-    or key == "gps_fixtype" ) {
+    or key == "gps_timelock" ) {
         return sensor_value_t(
                  boost::to_upper_copy(key),
                  get_cached_sensor(boost::to_upper_copy(key.substr(4,8)), GPS_NMEA_NORMAL_FRESHNESS, false, false),
@@ -478,9 +491,16 @@ private:
   }
 
   void init_lea_m8f(void) {
-      // Enable the UBX-NAV-SOL and the $GNRMC messages
-      const uint8_t en_nav_sol[11] = {0xb5, 0x62, 0x06, 0x01, 0x03, 0x00, 0x01, 0x06, 0x01, 0x12, 0x4f};
-      _send(std::string(reinterpret_cast<const char *>(en_nav_sol), sizeof(en_nav_sol)));
+      // Send a GNSS-only hotstart to make sure we're not in holdover right now
+      const uint8_t cfg_rst_hotstart[12] = {0xb5, 0x62, 0x06, 0x04, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x10, 0x68};
+      _send(std::string(reinterpret_cast<const char *>(cfg_rst_hotstart), sizeof(cfg_rst_hotstart)));
+
+      // Give time to module to reboot
+      sleep(milliseconds(2000));
+
+      // Enable the UBX-TIM-TOS and the $GNRMC messages
+      const uint8_t en_tim_tos[11] = {0xb5, 0x62, 0x06, 0x01, 0x03, 0x00, 0x0d, 0x12, 0x01, 0x2a, 0x8b};
+      _send(std::string(reinterpret_cast<const char *>(en_tim_tos), sizeof(en_tim_tos)));
 
       const uint8_t en_gnrmc[11]   = {0xb5, 0x62, 0x06, 0x01, 0x03, 0x00, 0xf0, 0x04, 0x01, 0xff, 0x18};
       _send(std::string(reinterpret_cast<const char *>(en_gnrmc), sizeof(en_gnrmc)));
@@ -522,9 +542,11 @@ private:
   ptime get_time(void) {
     _flush();
     int error_cnt = 0;
+    const int GPS_TIMEVALID_TIMEOUT_MS = 60000;
     ptime gps_time;
-    while(error_cnt < 2) {
-        try {
+    const boost::system_time valid_time_timeout = boost::get_system_time() + milliseconds(GPS_TIMEVALID_TIMEOUT_MS);
+    try {
+        while(boost::get_system_time() < valid_time_timeout) {
             std::string reply;
             if (gps_type == GPS_TYPE_LEA_M8F) {
                 reply = get_nmea("GNRMC");
@@ -536,8 +558,9 @@ private:
             std::string datestr = get_token(reply, 9);
             std::string timestr = get_token(reply, 1);
 
-            if(datestr.size() == 0 or timestr.size() == 0) {
-                throw uhd::value_error(str(boost::format("Invalid response \"%s\"") % reply));
+            if (datestr.size() == 0 or timestr.size() == 0) {
+                error_cnt++;
+                continue;
             }
 
             //just trust me on this one
@@ -550,14 +573,15 @@ private:
                         + minutes(boost::lexical_cast<int>(timestr.substr(2, 2)))
                         + seconds(boost::lexical_cast<int>(timestr.substr(4, 2)))
                      );
+            UHD_MSG(warning) << "get_time ok: " << error_cnt << std::endl;
             return gps_time;
 
-        } catch(std::exception &e) {
-            UHD_MSG(warning) << "get_time: " << e.what() << std::endl;
-            _flush();
-            error_cnt++;
         }
+    } catch(std::exception &e) {
+        UHD_MSG(error) << "get_time: " << e.what() << std::endl;
+        _flush();
     }
+    UHD_MSG(warning) << "get_time err: " << error_cnt << std::endl;
     throw uhd::value_error("Timeout after no valid message found");
 
     return gps_time; //keep gcc from complaining
@@ -581,9 +605,9 @@ private:
         try {
             std::string reply;
             if (gps_type == GPS_TYPE_LEA_M8F) {
-               reply = get_cached_sensor("FIXTYPE", GPS_LOCK_FRESHNESS, false, false);
-               UHD_MSG(warning) << "FIXTYPE is " << reply << std::endl;
-               return reply == "3d fix";
+               reply = get_cached_sensor("TIMELOCK", GPS_LOCK_FRESHNESS, false, false);
+               UHD_MSG(warning) << "TIMELOCK is " << reply << std::endl;
+               return reply == "locked";
             }
             else {
                reply = get_cached_sensor("GPGGA", GPS_LOCK_FRESHNESS, false, false);
@@ -650,7 +674,7 @@ private:
   static const int GPS_NMEA_LOW_FRESHNESS = 2500;
   static const int GPS_NMEA_NORMAL_FRESHNESS = 1000;
   static const int GPS_SERVO_FRESHNESS = 2500;
-  static const int GPS_LOCK_FRESHNESS = 2500;
+  static const int GPS_LOCK_FRESHNESS = 200;
   static const int GPS_TIMEOUT_DELAY_MS = 200;
   static const int GPSDO_STUPID_DELAY_MS = 200;
 };
