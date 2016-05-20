@@ -606,8 +606,7 @@ private:
             std::string reply;
             if (gps_type == GPS_TYPE_LEA_M8F) {
                reply = get_cached_sensor("TIMELOCK", GPS_LOCK_FRESHNESS, false, false);
-               UHD_MSG(warning) << "TIMELOCK is " << reply << std::endl;
-               return reply == "locked";
+               return reply == "TIME LOCKED";
             }
             else {
                reply = get_cached_sensor("GPGGA", GPS_LOCK_FRESHNESS, false, false);
