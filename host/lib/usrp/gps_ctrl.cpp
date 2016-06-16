@@ -372,9 +372,6 @@ public:
     _flush(); //get whatever junk is in the rx buffer right now, and throw it away
     _send("HAAAY GUYYYYS\n"); //to elicit a response from the GPSDO
 
-    // try to init LEA-M8F
-    init_lea_m8f();
-
     //wait for _send(...) to return
     sleep(milliseconds(GPSDO_COMMAND_DELAY_MS));
 
