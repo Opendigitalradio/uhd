@@ -101,8 +101,8 @@ adf4001_ctrl::adf4001_ctrl(uhd::spi_iface::sptr _spi, int slaveno):
     spi_config.mosi_edge = spi_config_t::EDGE_RISE;
 
     //set defaults
-    adf4001_regs.ref_counter = 96;
-    adf4001_regs.n = 125;
+    adf4001_regs.ref_counter = 1;
+    adf4001_regs.n = 4;
     adf4001_regs.charge_pump_current_1 = 7;
     adf4001_regs.charge_pump_current_2 = 7;
     adf4001_regs.muxout = adf4001_regs_t::MUXOUT_DLD;
@@ -123,6 +123,22 @@ void adf4001_ctrl::set_lock_to_ext_ref(bool external) {
     }
 
     program_regs();
+}
+
+bool adf4001_ctrl::set_refclk_frequency(int refclk_kHz)
+{
+    if (refclk_kHz == 30720) {
+        adf4001_regs.ref_counter = 96;
+        adf4001_regs.n = 125;
+    } else if (refclk_kHz == 10000) {
+        adf4001_regs.ref_counter = 1;
+        adf4001_regs.n = 4;
+    } else {
+        return false;
+    }
+
+    program_regs();
+    return true;
 }
 
 void adf4001_ctrl::program_regs(void) {

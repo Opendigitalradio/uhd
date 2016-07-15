@@ -722,6 +722,13 @@ b200_impl::b200_impl(const uhd::device_addr_t& device_addr, usb_device_handle::s
     //GPS installed: use external ref, time, and init time spec
     if (_gps and _gps->gps_detected())
     {
+        if (_gps->gps_detected_lea_m8f()) {
+            // Switch REFCLK Frequency to 30.72MHz before setting clock_source to gpsdo
+            if (not _adf4001_iface->set_refclk_frequency(30720)) {
+                throw uhd::value_error("Could not set refclk frequency to 30.72MHz for LEA-M8F!");
+            }
+        }
+
         UHD_MSG(status) << "Setting references to the internal GPSDO" << std::endl;
         _tree->access<std::string>(mb_path / "time_source" / "value").set("gpsdo");
         _tree->access<std::string>(mb_path / "clock_source" / "value").set("gpsdo");
