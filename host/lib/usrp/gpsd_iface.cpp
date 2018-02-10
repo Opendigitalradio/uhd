@@ -104,6 +104,10 @@ public:
 
     bool gps_detected(void) { return _detected; };
 
+    int gps_refclock_frequency(void) {
+        throw runtime_error("gps_refclock_frequency not implemented for gpsd_iface");
+    };
+
     std::vector<std::string> get_sensors(void) { return _sensors; };
 
 private: // member functions

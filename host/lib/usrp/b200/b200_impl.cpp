@@ -479,7 +479,8 @@ b200_impl::b200_impl(const uhd::device_addr_t& device_addr, usb_device_handle::s
     if (_gpsdo_capable)
     {
 
-        if ((_local_ctrl->peek32(RB32_CORE_STATUS) & 0xff) != B200_GPSDO_ST_NONE)
+        // Do not check this flag, I don't see why it is needed
+        //if ((_local_ctrl->peek32(RB32_CORE_STATUS) & 0xff) != B200_GPSDO_ST_NONE)
         {
             UHD_LOGGER_INFO("B200") << "Detecting internal GPSDO.... " << std::flush;
             try
@@ -778,6 +779,14 @@ b200_impl::b200_impl(const uhd::device_addr_t& device_addr, usb_device_handle::s
     //init to internal clock and time source
     _tree->access<std::string>(mb_path / "clock_source/value").set("internal");
     _tree->access<std::string>(mb_path / "time_source/value").set("internal");
+
+    //GPS installed: use external ref, time, and init time spec
+    if (_gps and _gps->gps_detected()) {
+      const int freq = _gps->gps_refclock_frequency();
+      if (not _adf4001_iface->set_refclk_frequency(freq)) {
+        throw uhd::value_error("Could not set refclk frequency");
+      }
+    }
 
     // Set the DSP chains to some safe value
     for (size_t i = 0; i < _radio_perifs.size(); i++) {

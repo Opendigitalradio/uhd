@@ -64,6 +64,14 @@ void b200_ref_pll_ctrl::set_lock_to_ext_ref(bool external)
     _spi->restore_perif();
 }
 
+bool b200_ref_pll_ctrl::set_refclk_frequency(int refclk_kHz)
+{
+    _spi->change_perif(b200_local_spi_core::PLL);
+    bool success = adf4001_ctrl::set_refclk_frequency(refclk_kHz);
+    _spi->restore_perif();
+    return success;
+}
+
 
 b200_local_spi_core::sptr b200_local_spi_core::make(
     uhd::wb_iface::sptr iface, b200_local_spi_core::perif_t default_perif)
