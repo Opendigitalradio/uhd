@@ -115,6 +115,21 @@ void adf4001_ctrl::set_lock_to_ext_ref(bool external) {
     program_regs();
 }
 
+bool adf4001_ctrl::set_refclk_frequency(int refclk_kHz) {
+    if (refclk_kHz == 30720) {
+        adf4001_regs.ref_counter = 96;
+        adf4001_regs.n = 125;
+    } else if (refclk_kHz == 10000) {
+        adf4001_regs.ref_counter = 1;
+        adf4001_regs.n = 4;
+    } else {
+        return false;
+    }
+
+    program_regs();
+    return true;
+}
+
 void adf4001_ctrl::program_regs(void) {
     //no control over CE, only LE, therefore we use the initialization latch method
     write_reg(3);

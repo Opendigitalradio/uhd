@@ -115,6 +115,7 @@ class adf4001_ctrl {
 public:
     adf4001_ctrl(uhd::spi_iface::sptr _spi, int slaveno);
     virtual void set_lock_to_ext_ref(bool external);
+    virtual bool set_refclk_frequency(int refclk_kHz);
 
 private:
     uhd::spi_iface::sptr spi_iface;
