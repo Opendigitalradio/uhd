@@ -26,6 +26,9 @@
 namespace po = boost::program_options;
 namespace fs = boost::filesystem;
 
+const size_t WARMUP_TIMEOUT_MS = 30000;
+const size_t LOCK_TIMEOUT_MS = 60000;
+
 void print_notes(void)
 {
     // Helpful notes
@@ -58,16 +61,31 @@ int query_clock_sensors(const std::string& args)
 
     // Print NMEA strings
     try {
-        uhd::sensor_value_t gga_string   = clock->get_sensor("gps_gpgga");
-        uhd::sensor_value_t rmc_string   = clock->get_sensor("gps_gprmc");
+        uhd::sensor_value_t gpgga_string = clock->get_sensor("gps_gpgga");
+        uhd::sensor_value_t gprmc_string = clock->get_sensor("gps_gprmc");
         uhd::sensor_value_t servo_string = clock->get_sensor("gps_servo");
-        std::cout << "\nPrinting available NMEA strings:\n";
-        std::cout << boost::format("%s\n%s\n") % gga_string.to_pp_string()
-                         % rmc_string.to_pp_string();
-        std::cout << "\nPrinting GPS servo status:\n";
+        std::cout << boost::format("\nPrinting available NMEA strings:\n");
+        std::cout << boost::format("%s\n%s\n") % gpgga_string.to_pp_string()
+                         % gprmc_string.to_pp_string();
+        std::cout << boost::format("\nPrinting GPS servo status:\n");
         std::cout << boost::format("%s\n\n") % servo_string.to_pp_string();
     } catch (const uhd::lookup_error&) {
-        std::cout << "NMEA strings not implemented for this device." << std::endl;
+        std::cout << "GPxxx NMEA strings not implemented for this device." << std::endl;
+    }
+
+    try {
+        uhd::sensor_value_t gngga_string = clock->get_sensor("gps_gngga");
+        uhd::sensor_value_t gnrmc_string = clock->get_sensor("gps_gnrmc");
+        uhd::sensor_value_t timelock_string = clock->get_sensor("gps_timelock");
+        uhd::sensor_value_t discsrc_string = clock->get_sensor("gps_discsrc");
+        std::cout << boost::format("%s\n%s\n") % gngga_string.to_pp_string()
+                         % gnrmc_string.to_pp_string();
+        std::cout << boost::format("\nPrinting GPS timelock:\n");
+        std::cout << boost::format("%s\n\n") % timelock_string.to_pp_string();
+        std::cout << boost::format("%s\n\n") % discsrc_string.to_pp_string();
+
+    } catch (const uhd::lookup_error&) {
+        std::cout << "GNxxx NMEA strings or timelock not implemented for this device." << std::endl;
     }
     std::cout << boost::format("GPS Epoch time: %.5f seconds\n")
                      % clock->get_sensor("gps_time").to_real();
@@ -124,6 +142,11 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
 
     // Verify GPS sensors are present (i.e. EEPROM has been burnt)
     std::vector<std::string> sensor_names = usrp->get_mboard_sensor_names(0);
+
+    std::cout << " Sensors: " << std::endl;
+    for (const auto& name : sensor_names) {
+      std::cout << " Sensor: " << name << std::endl;
+    }
 
     if (std::find(sensor_names.begin(), sensor_names.end(), "gps_locked")
         == sensor_names.end()) {
@@ -253,14 +276,26 @@ int UHD_SAFE_MAIN(int argc, char* argv[])
     std::cout << "Printing available NMEA strings:\n";
     try {
         std::cout << usrp->get_mboard_sensor("gps_gpgga").to_pp_string() << std::endl;
-    } catch (uhd::lookup_error&) {
+    } catch (uhd::value_error&) {
         std::cout << "GPGGA string not available for this device." << std::endl;
     }
     try {
         std::cout << usrp->get_mboard_sensor("gps_gprmc").to_pp_string() << std::endl;
-    } catch (uhd::lookup_error&) {
+    } catch (uhd::value_error&) {
         std::cout << "GPRMC string not available for this device." << std::endl;
     }
+
+    try {
+        std::cout << usrp->get_mboard_sensor("gps_gngga").to_pp_string() << std::endl;
+    } catch (uhd::value_error&) {
+        std::cout << "GNGGA string not available for this device." << std::endl;
+    }
+    try {
+        std::cout << usrp->get_mboard_sensor("gps_gnrmc").to_pp_string() << std::endl;
+    } catch (uhd::value_error&) {
+        std::cout << "GNRMC string not available for this device." << std::endl;
+    }
+
     std::cout << boost::format("GPS Epoch time at last PPS: %.5f seconds\n")
                      % usrp->get_mboard_sensor("gps_time").to_real();
     std::cout << boost::format("UHD Device time last PPS:   %.5f seconds\n")

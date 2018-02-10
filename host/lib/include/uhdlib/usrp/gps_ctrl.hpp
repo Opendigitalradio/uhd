@@ -43,6 +43,12 @@ public:
      */
     virtual bool gps_detected(void) = 0;
 
+  /*!
+   * Return what reference clock the GPSDO outputs.
+   * \return 0 if not GPSDO available. Frequency in kHz if a GPSDO is installed.
+   */
+  virtual int gps_refclock_frequency(void) = 0;
+
     /*! Send arbitrary command to the GPS device.
      *
      * Using this can cause the GPS to enter an unknown state, so use with

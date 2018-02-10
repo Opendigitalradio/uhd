@@ -49,6 +49,7 @@ public:
 
     b200_ref_pll_ctrl(b200_local_spi_core::sptr spi);
     void set_lock_to_ext_ref(bool external) override;
+    virtual bool set_refclk_frequency(int refclk_kHz);
 
 private:
     b200_local_spi_core::sptr _spi;
