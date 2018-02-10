@@ -716,6 +716,14 @@ b200_impl::b200_impl(const uhd::device_addr_t& device_addr, usb_device_handle::s
     _tree->access<std::string>(mb_path / "clock_source/value").set("internal");
     _tree->access<std::string>(mb_path / "time_source/value").set("internal");
 
+    //GPS installed: use external ref, time, and init time spec
+    if (_gps and _gps->gps_detected()) {
+      const int freq = _gps->gps_refclock_frequency();
+      if (not _adf4001_iface->set_refclk_frequency(freq)) {
+        throw uhd::value_error("Could not set refclk frequency to " + std::to_string(freq));
+      }
+    }
+
     // Set the DSP chains to some safe value
     for (size_t i = 0; i < _radio_perifs.size(); i++) {
         _radio_perifs[i].ddc->set_host_rate(default_tick_rate / ad936x_manager::DEFAULT_DECIM);

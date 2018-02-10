@@ -35,6 +35,7 @@ namespace po = boost::program_options;
 namespace fs = boost::filesystem;
 
 const size_t WARMUP_TIMEOUT_MS = 30000;
+const size_t LOCK_TIMEOUT_MS = 60000;
 
 void print_notes(void) {
   // Helpful notes
@@ -52,18 +53,23 @@ int query_clock_sensors(const std::string &args) {
   std::vector<std::string> sensor_names = clock->get_sensor_names(0);
   if(std::find(sensor_names.begin(), sensor_names.end(), "gps_locked") == sensor_names.end()) {
     std::cout << boost::format("\ngps_locked sensor not found.  This could mean that this unit does not have a GPSDO.\n\n");
-    return EXIT_FAILURE;
   }
 
   // Print NMEA strings
   try {
-      uhd::sensor_value_t gga_string = clock->get_sensor("gps_gpgga");
-      uhd::sensor_value_t rmc_string = clock->get_sensor("gps_gprmc");
+      uhd::sensor_value_t gpgga_string = clock->get_sensor("gps_gpgga");
+      uhd::sensor_value_t gprmc_string = clock->get_sensor("gps_gprmc");
+      uhd::sensor_value_t gngga_string = clock->get_sensor("gps_gngga");
+      uhd::sensor_value_t gnrmc_string = clock->get_sensor("gps_gnrmc");
       uhd::sensor_value_t servo_string = clock->get_sensor("gps_servo");
+      uhd::sensor_value_t timelock_string = clock->get_sensor("gps_timelock");
       std::cout << boost::format("\nPrinting available NMEA strings:\n");
-      std::cout << boost::format("%s\n%s\n") % gga_string.to_pp_string() % rmc_string.to_pp_string();
+      std::cout << boost::format("%s\n%s\n") % gpgga_string.to_pp_string() % gprmc_string.to_pp_string();
+      std::cout << boost::format("%s\n%s\n") % gngga_string.to_pp_string() % gnrmc_string.to_pp_string();
       std::cout << boost::format("\nPrinting GPS servo status:\n");
       std::cout << boost::format("%s\n\n") % servo_string.to_pp_string();
+      std::cout << boost::format("\nPrinting GPS timelock:\n");
+      std::cout << boost::format("%s\n\n") % timelock_string.to_pp_string();
   } catch (uhd::lookup_error &e) {
       std::cout << "NMEA strings not implemented for this device." << std::endl;
   }
@@ -113,6 +119,12 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
 
   //Verify GPS sensors are present (i.e. EEPROM has been burnt)
   std::vector<std::string> sensor_names = usrp->get_mboard_sensor_names(0);
+
+  std::cout << " Sensors: " << std::endl;
+  for (const auto& name : sensor_names) {
+    std::cout << " Sensor: " << name << std::endl;
+  }
+
 
   if (std::find(sensor_names.begin(), sensor_names.end(), "gps_locked") == sensor_names.end()) {
       std::cout << boost::format("\ngps_locked sensor not found.  This could mean that you have not installed the GPSDO correctly.\n\n");
@@ -185,6 +197,7 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
       std::cout << "." << std::flush;
   }
   std::cout << std::endl;
+
   try {
       usrp->get_mboard_sensor("gps_locked",0);
   } catch (std::exception &) {
@@ -194,6 +207,21 @@ int UHD_SAFE_MAIN(int argc, char *argv[]){
   std::cout << "The GPSDO is warmed up and talking." << std::endl;
 
   //Check for GPS lock
+  exit_time = boost::get_system_time() +
+              boost::posix_time::milliseconds(LOCK_TIMEOUT_MS);
+  while (boost::get_system_time() < exit_time) {
+    uhd::sensor_value_t gps_locked = usrp->get_mboard_sensor("gps_locked",0);;
+
+    if (gps_locked.to_bool()) {
+      break;
+    }
+    else {
+      std::cout << "gps_locked = " << gps_locked.value << std::endl;
+    }
+
+    boost::this_thread::sleep(boost::posix_time::seconds(1));
+  }
+
   uhd::sensor_value_t gps_locked = usrp->get_mboard_sensor("gps_locked",0);;
   if(not gps_locked.to_bool()) {
       std::cout << boost::format("\nGPS does not have lock. Wait a few minutes and try again.\n");

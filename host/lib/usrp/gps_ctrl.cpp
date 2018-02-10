@@ -40,6 +40,115 @@ using namespace boost::algorithm;
 using namespace boost::this_thread;
 
 /*!
+ * A NMEA and UBX Parser for the LEA-M8F and other GPSDOs
+ */
+class gps_ctrl_parser {
+  private:
+    std::deque<char> gps_data_input;
+
+    std::string parse_ubx() {
+      // Assumptions:
+      // The deque now contains an UBX message in the format
+      //  \xb6\x62<CLASS><ID><LEN><PAYLOAD><CRC>
+      // where
+      //  <CLASS> is 1 byte
+      //  <ID>    is 1 byte
+      //  <LEN>   is 2 bytes (little-endian), length of <PAYLOAD>
+      //  <CRC>   is 2 bytes
+
+      uint8_t ck_a = 0;
+      uint8_t ck_b = 0;
+
+      if (gps_data_input.size() >= 8) {
+        uint8_t len_lo = gps_data_input[4];
+        uint8_t len_hi = gps_data_input[5];
+        size_t len     = len_lo | (len_hi << 8);
+
+        if (gps_data_input.size() >= len + 8) {
+          /*
+          std::cerr << "DATA: ";
+          for (size_t i=0; i < gps_data_input.size(); i++) {
+            uint8_t dat = gps_data_input[i];
+            std::cerr << boost::format("%02x ") % (unsigned int)dat;
+          }
+          std::cerr << std::endl;
+          */
+
+          uint8_t ck_a_packet = gps_data_input[len+6];
+          uint8_t ck_b_packet = gps_data_input[len+7];
+
+          // Range over which CRC is calculated is <CLASS><ID><LEN><PAYLOAD>
+          for (size_t i = 2; i < len+6; i++) {
+            ck_a += (uint8_t)(gps_data_input[i]);
+            ck_b += ck_a;
+          }
+
+          std::string msg(gps_data_input.begin(), gps_data_input.begin() + (len + 8));
+          gps_data_input.erase(gps_data_input.begin(), gps_data_input.begin() + (len + 8));
+
+          if (ck_a == ck_a_packet and ck_b == ck_b_packet) {
+            return msg;
+          }
+        }
+      }
+
+      return std::string();
+    }
+
+    std::string parse_nmea() {
+      // Assumptions:
+      // The deque now contains an NMEA message in the format
+      //  $G.................*XX<CR><LF>
+      // the checksum XX is dropped from the message
+
+      std::deque<char>::iterator star;
+      star = std::find(gps_data_input.begin() + 2, gps_data_input.end(), '*');
+      if (star != gps_data_input.end()) {
+        std::string msg(gps_data_input.begin(), star);
+
+        // The parser will take care of the leftover *XX<CR><LF>
+        gps_data_input.erase(gps_data_input.begin(), star);
+        return msg;
+      }
+
+      return std::string();
+    }
+
+  public:
+    template <class InputIterator>
+      void push_data(InputIterator first, InputIterator last) {
+        gps_data_input.insert(gps_data_input.end(), first, last);
+      }
+
+    std::string get_next_message() {
+      while (gps_data_input.size() >= 2) {
+        char header1 = gps_data_input[0];
+        char header2 = gps_data_input[1];
+
+        std::string parsed;
+
+        if (header1 == '$' and header2 == 'G') {
+          parsed = parse_nmea();
+        }
+        else if (header1 == '\xb5' and header2 == '\x62') {
+          parsed = parse_ubx();
+        }
+
+        if (parsed.empty()) {
+          gps_data_input.pop_front();
+        }
+        else {
+          return parsed;
+        }
+      }
+      return std::string();
+    }
+
+    size_t size() { return gps_data_input.size(); }
+};
+
+
+/*!
  * A control for GPSDO devices
  */
 
@@ -52,6 +161,8 @@ private:
     std::map<std::string, boost::tuple<std::string, boost::system_time, bool> > sentences;
     boost::mutex cache_mutex;
     boost::system_time _last_cache_update;
+
+    gps_ctrl_parser _gps_parser;
 
     std::string get_sentence(const std::string which, const int max_age_ms, const int timeout, const bool wait_for_next = false)
     {
@@ -138,44 +249,131 @@ private:
         return;
     }
 
-    const std::list<std::string> keys = boost::assign::list_of("GPGGA")("GPRMC")("SERVO");
-    static const boost::regex servo_regex("^\\d\\d-\\d\\d-\\d\\d.*$");
-    static const boost::regex gp_msg_regex("^\\$GP.*,\\*[0-9A-F]{2}$");
+    std::list<std::string> keys;
     std::map<std::string,std::string> msgs;
 
-    // Get all GPSDO messages available
-    // Creating a map here because we only want the latest of each message type
-    for (std::string msg = _recv(0); not msg.empty(); msg = _recv(0))
-    {
+    if (_gps_type == GPS_TYPE_LEA_M8F) {
+      keys = {"GNGGA", "GNRMC", "TIMELOCK"};
+
+      // Concatenate all incoming data into the deque
+      for (std::string msg = _recv(); msg.length() > 0; msg = _recv())
+      {
+        _gps_parser.push_data(msg.begin(), msg.end());
+      }
+
+      // Get all GPSDO messages available
+      // Creating a map here because we only want the latest of each message type
+      for (std::string msg = _gps_parser.get_next_message();
+          not msg.empty();
+          msg = _gps_parser.get_next_message())
+      {
+        /*
+        if (msg[0] != '$') {
+          std::stringstream ss;
+          ss << "Got message ";
+          for (size_t m = 0; m < msg.size(); m++) {
+            ss << std::hex << (unsigned int)(unsigned char)msg[m] << " " << std::dec;
+          }
+          UHD_MSG(warning) << ss.str() << ":" << std::endl;
+        } // */
+
+        const uint8_t tim_tos_head[4] = {0xb5, 0x62, 0x0D, 0x12};
+        const std::string tim_tos_head_str(reinterpret_cast<const char *>(tim_tos_head), 4);
+
+        // Try to get NMEA first
+        if (msg[0] == '$') {
+          msgs[msg.substr(1,5)] = msg;
+        }
+        else if (msg.find(tim_tos_head_str) == 0 and msg.length() == 56 + 8) {
+          // header size == 6, field offset == 4, 32-bit field
+          uint8_t flags1 = msg[6 + 4];
+          uint8_t flags2 = msg[6 + 5];
+          uint8_t flags3 = msg[6 + 5];
+          uint8_t flags4 = msg[6 + 5];
+
+          uint32_t flags = flags1 | (flags2 << 8) | (flags3 << 16) | (flags4 << 24);
+          /* bits in flags are:
+             leapNow 0
+             leapSoon 1
+             leapPositive 2
+             timeInLimit 3
+             intOscInLimit 4
+             extOscInLimit 5
+             gnssTimeValid 6
+             UTCTimeValid 7
+             DiscSrc 10
+             raim 11
+             cohPulse 12
+             lockedPulse 13
+             */
+
+          bool lockedPulse   = (flags & (1 << 13));
+          bool timeInLimit   = (flags & (1 << 3));
+          bool intOscInLimit = (flags & (1 << 4));
+
+          if (lockedPulse and timeInLimit and intOscInLimit) {
+            msgs["TIMELOCK"] = "TIME LOCKED";
+          }
+          else {
+            std::stringstream ss;
+            ss <<
+              (lockedPulse   ? "" : "no" ) << "lockedPulse " <<
+              (timeInLimit   ? "" : "no" ) << "timeInLimit " <<
+              (intOscInLimit ? "" : "no" ) << "intOscInLimit ";
+
+            msgs["TIMELOCK"] = ss.str();
+          }
+        }
+        else if (msg[0] == '\xb5' and msg[1] == '\x62') { /* Ignore unsupported UBX message */ }
+        else {
+          std::stringstream ss;
+          ss << "Unknown message ";
+          for (size_t m = 0; m < msg.size(); m++) {
+            ss << std::hex << (unsigned int)(unsigned char)msg[m] << " " << std::dec;
+          }
+          UHD_MSG(warning) << ss.str() << ":" << std::endl << msg << std::endl;
+         }
+      }
+    }
+    else {
+      keys = {"GPGGA", "GPRMC", "SERVO"};
+      static const boost::regex servo_regex("^\\d\\d-\\d\\d-\\d\\d.*$");
+      static const boost::regex gp_msg_regex("^\\$GP.*,\\*[0-9A-F]{2}$");
+
+      // Get all GPSDO messages available
+      // Creating a map here because we only want the latest of each message type
+      for (std::string msg = _recv(0); not msg.empty(); msg = _recv(0))
+      {
         // Strip any end of line characters
         erase_all(msg, "\r");
         erase_all(msg, "\n");
 
         if (msg.empty())
         {
-            // Ignore empty strings
-            continue;
+          // Ignore empty strings
+          continue;
         }
 
         if (msg.length() < 6)
         {
-            UHD_LOGV(regularly) << __FUNCTION__ << ": Short GPSDO string: " << msg << std::endl;
-            continue;
+          UHD_LOGV(regularly) << __FUNCTION__ << ": Short GPSDO string: " << msg << std::endl;
+          continue;
         }
 
         // Look for SERVO message
         if (boost::regex_search(msg, servo_regex, boost::regex_constants::match_continuous))
         {
-            msgs["SERVO"] = msg;
+          msgs["SERVO"] = msg;
         }
         else if (boost::regex_match(msg, gp_msg_regex) and is_nmea_checksum_ok(msg))
         {
-            msgs[msg.substr(1,5)] = msg;
+          msgs[msg.substr(1,5)] = msg;
         }
         else
         {
-            UHD_LOGV(regularly) << __FUNCTION__ << ": Malformed GPSDO string: " << msg << std::endl;
+          UHD_LOGV(regularly) << __FUNCTION__ << ": Malformed GPSDO string: " << msg << std::endl;
         }
+      }
     }
 
     boost::system_time time = boost::get_system_time();
@@ -183,10 +381,10 @@ private:
     // Update sentences with newly read data
     BOOST_FOREACH(std::string key, keys)
     {
-        if (not msgs[key].empty())
-        {
-            sentences[key] = boost::make_tuple(msgs[key], time, false);
-        }
+      if (not msgs[key].empty())
+      {
+        sentences[key] = boost::make_tuple(msgs[key], time, false);
+      }
     }
 
     _last_cache_update = time;
@@ -219,6 +417,11 @@ public:
         break;
       } else if(reply.substr(0, 3) == "$GP") {
           i_heard_some_nmea = true; //but keep looking
+      } else if(reply.substr(0, 3) == "$GN"
+          or reply.substr(0, 2) == "\xB5""\x62") {
+          // The u-blox LEA-M8F outputs UBX protocol messages
+          _gps_type = GPS_TYPE_LEA_M8F;
+          break;
       } else if(not reply.empty()) {
           // wrong baud rate or firmware still initializing
           i_heard_something_weird = true;
@@ -250,6 +453,11 @@ public:
       UHD_MSG(status) << "Found a generic NMEA GPS device" << std::endl;
       break;
 
+    case GPS_TYPE_LEA_M8F:
+      UHD_MSG(status) << "Found a LEA-M8F GPS device" << std::endl;
+      init_lea_m8f();
+      break;
+
     case GPS_TYPE_NONE:
     default:
       UHD_MSG(status) << "No GPSDO found" << std::endl;
@@ -270,15 +478,21 @@ public:
     std::vector<std::string> ret = boost::assign::list_of
         ("gps_gpgga")
         ("gps_gprmc")
+        ("gps_gngga")
+        ("gps_gnrmc")
         ("gps_time")
         ("gps_locked")
-        ("gps_servo");
+        ("gps_servo")
+        ("gps_timelock");
     return ret;
   }
 
   uhd::sensor_value_t get_sensor(std::string key) {
     if(key == "gps_gpgga"
-    or key == "gps_gprmc") {
+    or key == "gps_gprmc"
+    or key == "gps_gngga"
+    or key == "gps_gnrmc"
+    or key == "gps_timelock") {
         return sensor_value_t(
                  boost::to_upper_copy(key),
                  get_sentence(boost::to_upper_copy(key.substr(4,8)), GPS_NMEA_NORMAL_FRESHNESS, GPS_TIMEOUT_DELAY_MS),
@@ -321,6 +535,22 @@ private:
      sleep(milliseconds(GPSDO_COMMAND_DELAY_MS));
   }
 
+  void init_lea_m8f(void) {
+    // Send a GNSS-only hotstart to make sure we're not in holdover right now
+    const uint8_t cfg_rst_hotstart[12] = {0xb5, 0x62, 0x06, 0x04, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x10, 0x68};
+    _send(std::string(reinterpret_cast<const char *>(cfg_rst_hotstart), sizeof(cfg_rst_hotstart)));
+
+    // Give time to module to reboot
+    sleep(milliseconds(2000));
+
+    // Enable the UBX-TIM-TOS and the $GNRMC messages
+    const uint8_t en_tim_tos[11] = {0xb5, 0x62, 0x06, 0x01, 0x03, 0x00, 0x0d, 0x12, 0x01, 0x2a, 0x8b};
+    _send(std::string(reinterpret_cast<const char *>(en_tim_tos), sizeof(en_tim_tos)));
+
+    const uint8_t en_gnrmc[11]   = {0xb5, 0x62, 0x06, 0x01, 0x03, 0x00, 0xf0, 0x04, 0x01, 0xff, 0x18};
+    _send(std::string(reinterpret_cast<const char *>(en_gnrmc), sizeof(en_gnrmc)));
+  }
+
   //helper function to retrieve a field from an NMEA sentence
   std::string get_token(std::string sentence, size_t offset) {
     boost::tokenizer<boost::escaped_list_separator<char> > tok(sentence);
@@ -337,10 +567,11 @@ private:
   ptime get_time(void) {
     int error_cnt = 0;
     ptime gps_time;
+    const std::string rmc = (_gps_type == GPS_TYPE_LEA_M8F) ? "GNRMC" : "GPRMC";
     while(error_cnt < 2) {
         try {
             // wait for next GPRMC string
-            std::string reply = get_sentence("GPRMC", GPS_NMEA_NORMAL_FRESHNESS, GPS_COMM_TIMEOUT_MS, true);
+            std::string reply = get_sentence(rmc, GPS_NMEA_NORMAL_FRESHNESS, GPS_COMM_TIMEOUT_MS, true);
 
             std::string datestr = get_token(reply, 9);
             std::string timestr = get_token(reply, 1);
@@ -379,15 +610,32 @@ private:
     return (_gps_type != GPS_TYPE_NONE);
   }
 
+  int gps_refclock_frequency(void) {
+    if (_gps_type == GPS_TYPE_LEA_M8F) {
+      return 30720;
+    }
+    else if (_gps_type != GPS_TYPE_NONE) {
+      return 10000;
+    }
+    return 0;
+  }
+
   bool locked(void) {
     int error_cnt = 0;
+    const std::string locksentence = (_gps_type == GPS_TYPE_LEA_M8F) ? "TIMELOCK" : "GPGGA";
     while(error_cnt < 3) {
         try {
-            std::string reply = get_sentence("GPGGA", GPS_LOCK_FRESHNESS, GPS_COMM_TIMEOUT_MS);
+            std::string reply = get_sentence(locksentence, GPS_LOCK_FRESHNESS, GPS_COMM_TIMEOUT_MS);
             if(reply.empty())
                 error_cnt++;
-            else
+            else {
+              if (_gps_type == GPS_TYPE_LEA_M8F) {
+                return reply == "TIME LOCKED";
+              }
+              else {
                 return (get_token(reply, 6) != "0");
+              }
+            }
         } catch(std::exception &e) {
             UHD_LOGV(often) << "locked: " << e.what();
             error_cnt++;
@@ -415,6 +663,7 @@ private:
   enum {
     GPS_TYPE_INTERNAL_GPSDO,
     GPS_TYPE_GENERIC_NMEA,
+    GPS_TYPE_LEA_M8F,
     GPS_TYPE_NONE
   } _gps_type;
 
