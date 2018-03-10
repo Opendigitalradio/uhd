@@ -253,7 +253,9 @@ private:
     std::map<std::string,std::string> msgs;
 
     if (_gps_type == GPS_TYPE_LEA_M8F) {
-      keys = {"GNGGA", "GNRMC", "TIMELOCK"};
+      keys.push_back("GNGGA");
+      keys.push_back("GNRMC");
+      keys.push_back("TIMELOCK");
 
       // Concatenate all incoming data into the deque
       for (std::string msg = _recv(); msg.length() > 0; msg = _recv())
@@ -336,7 +338,9 @@ private:
       }
     }
     else {
-      keys = {"GPGGA", "GPRMC", "SERVO"};
+      keys.push_back("GPGGA");
+      keys.push_back("GPRMC");
+      keys.push_back("SERVO");
       static const boost::regex servo_regex("^\\d\\d-\\d\\d-\\d\\d.*$");
       static const boost::regex gp_msg_regex("^\\$GP.*,\\*[0-9A-F]{2}$");
 
