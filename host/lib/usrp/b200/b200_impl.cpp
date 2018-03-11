@@ -720,7 +720,7 @@ b200_impl::b200_impl(const uhd::device_addr_t& device_addr, usb_device_handle::s
     if (_gps and _gps->gps_detected()) {
       const int freq = _gps->gps_refclock_frequency();
       if (not _adf4001_iface->set_refclk_frequency(freq)) {
-        throw uhd::value_error("Could not set refclk frequency to " + std::to_string(freq));
+        throw uhd::value_error("Could not set refclk frequency");
       }
     }
 
