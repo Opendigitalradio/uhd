@@ -251,7 +251,7 @@ private:
     std::map<std::string,std::string> msgs;
 
     if (_gps_type == GPS_TYPE_LEA_M8F) {
-      keys = {"GNGGA", "GNRMC", "TIMELOCK"};
+      keys = {"GNGGA", "GNRMC", "TIMELOCK", "DISCSRC"};
 
       // Concatenate all incoming data into the deque
       for (std::string msg = _recv(); msg.length() > 0; msg = _recv())
@@ -308,6 +308,7 @@ private:
           bool lockedPulse   = (flags & (1 << 13));
           bool timeInLimit   = (flags & (1 << 3));
           bool intOscInLimit = (flags & (1 << 4));
+          uint8_t discSrc    = (flags >> 8) & 0x07;
 
           if (lockedPulse and timeInLimit and intOscInLimit) {
             msgs["TIMELOCK"] = "TIME LOCKED";
@@ -318,8 +319,13 @@ private:
               (lockedPulse   ? "" : "no" ) << "lockedPulse " <<
               (timeInLimit   ? "" : "no" ) << "timeInLimit " <<
               (intOscInLimit ? "" : "no" ) << "intOscInLimit ";
-
             msgs["TIMELOCK"] = ss.str();
+          }
+
+          switch (discSrc) {
+              case 0: msgs["DISCSRC"] = "internal"; break;
+              case 1: msgs["DISCSRC"] = "gnss"; break;
+              default: msgs["DISCSRC"] = "other"; break;
           }
         }
         else if (msg[0] == '\xb5' and msg[1] == '\x62') { /* Ignore unsupported UBX message */ }
@@ -482,7 +488,8 @@ public:
           "gps_time",
           "gps_locked",
           "gps_servo",
-          "gps_timelock"
+          "gps_timelock",
+          "gps_discsrc"
       };
       return ret;
   }
@@ -492,7 +499,8 @@ public:
     or key == "gps_gprmc"
     or key == "gps_gngga"
     or key == "gps_gnrmc"
-    or key == "gps_timelock") {
+    or key == "gps_timelock"
+    or key == "gps_discsrc") {
         return sensor_value_t(
                  boost::to_upper_copy(key),
                  get_sentence(boost::to_upper_copy(key.substr(4,8)), GPS_NMEA_NORMAL_FRESHNESS, GPS_TIMEOUT_DELAY_MS),
@@ -538,13 +546,6 @@ private:
   }
 
   void init_lea_m8f(void) {
-    // Send a GNSS-only hotstart to make sure we're not in holdover right now
-    const uint8_t cfg_rst_hotstart[12] = {0xb5, 0x62, 0x06, 0x04, 0x04, 0x00, 0x00, 0x00, 0x02, 0x00, 0x10, 0x68};
-    _send(std::string(reinterpret_cast<const char *>(cfg_rst_hotstart), sizeof(cfg_rst_hotstart)));
-
-    // Give time to module to reboot
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-
     // Enable the UBX-TIM-TOS and the $GNRMC messages
     const uint8_t en_tim_tos[11] = {0xb5, 0x62, 0x06, 0x01, 0x03, 0x00, 0x0d, 0x12, 0x01, 0x2a, 0x8b};
     _send(std::string(reinterpret_cast<const char *>(en_tim_tos), sizeof(en_tim_tos)));
